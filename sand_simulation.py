@@ -325,15 +325,17 @@ class SandSimulation:
                 if not sand.settled:
                     new_y = int((sand.y + SAND_SIZE) // SAND_SIZE)
                     new_x = int(sand.x // SAND_SIZE)
-                    # Check if sand will hit ground or other sand
                     if (new_y >= WINDOW_HEIGHT//SAND_SIZE or 
                         (new_y < WINDOW_HEIGHT//SAND_SIZE and self.grid[new_x][new_y])):
-                        self.can_move = False  # Disable movement once touched
+                        self.can_move = False
                         break
         
         # Regular update for all particles
+        any_settled_this_frame = False  # Track if any particles settled this frame
+        
         for sand in self.sand_particles:
             initial_pos = (sand.x, sand.y)
+            was_settled = sand.settled
             
             if sand.settled:
                 x, y = int(sand.x // SAND_SIZE), int(sand.y // SAND_SIZE)
@@ -365,6 +367,9 @@ class SandSimulation:
                 self.grid[new_x][current_y] = True
                 sand.x = new_x * SAND_SIZE
                 sand.y = current_y * SAND_SIZE
+                
+                if not was_settled:  # If particle just settled this frame
+                    any_settled_this_frame = True
                 continue
             
             if not self.grid[new_x][new_y]:
@@ -374,8 +379,8 @@ class SandSimulation:
             if (sand.x, sand.y) != initial_pos:
                 any_movement = True
         
-        # Check the connection of sand
-        if not any_movement:
+        # Check for connections if any particles settled or if no movement
+        if any_settled_this_frame or not any_movement:
             self.check_and_remove_connected_sand()
     
     def draw(self, surface):
