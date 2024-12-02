@@ -41,9 +41,12 @@ class SandSimulation:
         self.height_threshold = 2
         self.square_size = 20
         self.current_x = WINDOW_WIDTH // 2
-        self.move_speed = 5 * SAND_SIZE
+        self.move_speed = 2 * SAND_SIZE
         self.active_square = None
         self.can_move = True
+        self.flash_timer = None
+        self.sand_to_remove = None
+        self.flash_duration = 1  # Changed from 100 to 50 milliseconds
         
     def is_square_landed(self):
         """Check if the current square has landed"""
@@ -53,6 +56,10 @@ class SandSimulation:
         for sand in self.active_square:
             if not sand.settled:
                 return False
+                
+        # When square has landed, check and remove connected sand
+        if self.flash_timer is None:  # Only start flash if not already flashing
+            self.check_and_remove_connected_sand()
         return True
 
     def move_left(self):
@@ -164,7 +171,31 @@ class SandSimulation:
         return connected
     
     def check_and_remove_connected_sand(self):
-        """Check for same-colored sand that touches both bounds and remove it immediately"""
+        """Check for same-colored sand that touches both bounds and remove it after flashing"""
+        current_time = pygame.time.get_ticks()
+        
+        # Handle removal after flash
+        if self.flash_timer is not None:
+            if current_time - self.flash_timer >= self.flash_duration:
+                if self.sand_to_remove:
+                    # Update grid
+                    for x, y in self.sand_to_remove:
+                        self.grid[x][y] = False
+                    
+                    # Remove particles
+                    self.sand_particles = [sand for sand in self.sand_particles 
+                                         if (int(sand.x//SAND_SIZE), 
+                                             int(sand.y//SAND_SIZE)) not in self.sand_to_remove]
+                    
+                    # Clear active square if all its particles were removed
+                    if self.active_square:
+                        self.active_square = [sand for sand in self.active_square 
+                                            if sand in self.sand_particles]
+                
+                self.flash_timer = None
+                self.sand_to_remove = None
+            return
+            
         visited = set()
         all_connected = set()
         
@@ -188,22 +219,11 @@ class SandSimulation:
                 if any(x == (WINDOW_WIDTH//SAND_SIZE - 1) for x, _ in connected):
                     all_connected.update(connected)
         
-        # Remove connected sand immediately if found
-        if all_connected:
-            # Update grid
-            for x, y in all_connected:
-                self.grid[x][y] = False
+        # Start flash timer if connected sand is found
+        if all_connected and not self.flash_timer:
+            self.flash_timer = current_time
+            self.sand_to_remove = all_connected
             
-            # Remove particles
-            self.sand_particles = [sand for sand in self.sand_particles 
-                                 if (int(sand.x//SAND_SIZE), 
-                                     int(sand.y//SAND_SIZE)) not in all_connected]
-            
-            # Clear active square if all its particles were removed
-            if self.active_square:
-                self.active_square = [sand for sand in self.active_square 
-                                    if sand in self.sand_particles]
-    
     def add_sand_square(self, center_x):
         # Calculate the top-left corner of the square
         start_x = center_x - (self.square_size * SAND_SIZE) // 2
@@ -358,8 +378,16 @@ class SandSimulation:
             self.check_and_remove_connected_sand()
     
     def draw(self, surface):
+        WHITE = (255, 255, 255)
+        
         for sand in self.sand_particles:
-            pygame.draw.rect(surface, sand.color, 
+            color = sand.color
+            # If sand is marked for removal and flashing, draw it white
+            if (self.sand_to_remove and 
+                (int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)) in self.sand_to_remove):
+                color = WHITE
+                
+            pygame.draw.rect(surface, color, 
                            (int(sand.x), int(sand.y), SAND_SIZE, SAND_SIZE))
 
 def main():
@@ -367,8 +395,8 @@ def main():
     running = True
     
     # Spawn the first square
-    simulation.add_sand_square(WINDOW_WIDTH // 2)  # Reset current_x to center
-    simulation.current_x = WINDOW_WIDTH // 2  # Reset spawn position
+    simulation.add_sand_square(WINDOW_WIDTH // 2)
+    simulation.current_x = WINDOW_WIDTH // 2
 
     while running:
         for event in pygame.event.get():
@@ -385,9 +413,11 @@ def main():
         # Update sand positions
         simulation.update()
         
-        # Spawn new square if previous one has landed
-        if simulation.is_square_landed():
-            simulation.current_x = WINDOW_WIDTH // 2  # Reset spawn position to center
+        # Only spawn new square if previous one has landed and flash/removal is complete
+        if (simulation.is_square_landed() and 
+            simulation.flash_timer is None and 
+            simulation.sand_to_remove is None):
+            simulation.current_x = WINDOW_WIDTH // 2
             simulation.add_sand_square(simulation.current_x)
         
         # Draw
