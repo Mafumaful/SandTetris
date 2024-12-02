@@ -14,11 +14,8 @@ FPS = 60       # 调整帧率
 # 颜色定义
 BLACK = (0, 0, 0)
 SAND_COLORS = [
-    (194, 178, 128),  # 浅沙色
-    (189, 174, 124),  # 沙色变体1
-    (199, 183, 133),  # 沙色变体2
-    (201, 186, 136),  # 沙色变体3
-    (187, 171, 121),  # 沙色变体4
+    (255, 255, 0),  # Yellow
+    (0, 0, 255),    # Blue
 ]
 
 # 创建窗口
@@ -45,15 +42,91 @@ class SandSimulation:
         self.square_size = 20
         self.connected_sand_timer = None
         self.sand_to_remove = None
-        self.touch_timer = None  # Timer for when sand touches
-        self.touch_delay = 20   # Delay in milliseconds before checking connection
+        self.touch_delay = 20
+        self.current_x = WINDOW_WIDTH // 2
+        self.move_speed = 5 * SAND_SIZE
+        self.active_square = None
+        self.can_move = True  # Flag to control movement
+        
+    def is_square_landed(self):
+        """Check if the current square has landed"""
+        if not self.active_square:
+            return True
+            
+        for sand in self.active_square:
+            if not sand.settled:
+                return False
+        return True
+
+    def move_left(self):
+        if not self.can_move or not self.active_square:
+            return
+            
+        # Check if any particle would go out of bounds
+        leftmost = min(int(sand.x - self.move_speed) for sand in self.active_square 
+                      if not sand.settled)
+        if leftmost < 0:
+            # Move only as far as the border
+            offset = -min(int(sand.x) for sand in self.active_square 
+                         if not sand.settled)
+            if offset < 0:
+                for sand in self.active_square:
+                    if not sand.settled:
+                        sand.x += offset
+            return
+            
+        # Move all particles in active square
+        for sand in self.active_square:
+            if not sand.settled:
+                new_x = sand.x - self.move_speed
+                grid_x = int(new_x // SAND_SIZE)
+                grid_y = int(sand.y // SAND_SIZE)
+                if not self.grid[grid_x][grid_y]:
+                    sand.x = new_x
+
+    def move_right(self):
+        if not self.can_move or not self.active_square:
+            return
+            
+        # Check if any particle would go out of bounds
+        rightmost = max(int(sand.x + self.move_speed) for sand in self.active_square 
+                       if not sand.settled)
+        if rightmost >= WINDOW_WIDTH:
+            # Move only as far as the border
+            offset = WINDOW_WIDTH - max(int(sand.x + SAND_SIZE) for sand in self.active_square 
+                                      if not sand.settled)
+            if offset > 0:
+                for sand in self.active_square:
+                    if not sand.settled:
+                        sand.x += offset
+            return
+            
+        # Move all particles in active square
+        for sand in self.active_square:
+            if not sand.settled:
+                new_x = sand.x + self.move_speed
+                grid_x = int(new_x // SAND_SIZE)
+                grid_y = int(sand.y // SAND_SIZE)
+                if not self.grid[grid_x][grid_y]:
+                    sand.x = new_x
     
-    def find_connected_sand(self, start_x, start_y, visited):
-        """Find all connected sand particles using iterative flood fill with 8-direction check"""
+    def find_connected_sand(self, start_x, start_y, color, visited):
+        """Find all connected sand particles of the same color using iterative flood fill"""
         if (start_x < 0 or start_x >= WINDOW_WIDTH//SAND_SIZE or
             start_y < 0 or start_y >= WINDOW_HEIGHT//SAND_SIZE or
             not self.grid[start_x][start_y] or
             (start_x, start_y) in visited):
+            return set()
+        
+        # Get the sand particle at this position
+        sand_at_pos = None
+        for sand in self.sand_particles:
+            if (int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)) == (start_x, start_y):
+                sand_at_pos = sand
+                break
+        
+        # If no sand found or different color, return empty set
+        if not sand_at_pos or sand_at_pos.color != color:
             return set()
         
         connected = set()
@@ -64,14 +137,24 @@ class SandSimulation:
             
             if (x, y) in visited:
                 continue
+            
+            # Check if current position has same-colored sand
+            current_sand = None
+            for sand in self.sand_particles:
+                if (int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)) == (x, y):
+                    current_sand = sand
+                    break
+            
+            if not current_sand or current_sand.color != color:
+                continue
                 
             visited.add((x, y))
             connected.add((x, y))
             
-            # Check all 8 directions (including diagonals)
+            # Check all 8 directions
             directions = [
-                (0, 1), (0, -1), (1, 0), (-1, 0),  # orthogonal
-                (1, 1), (1, -1), (-1, 1), (-1, -1)  # diagonal
+                (0, 1), (0, -1), (1, 0), (-1, 0),
+                (1, 1), (1, -1), (-1, 1), (-1, -1)
             ]
             for dx, dy in directions:
                 next_x, next_y = x + dx, y + dy
@@ -84,56 +167,72 @@ class SandSimulation:
         return connected
     
     def check_and_remove_connected_sand(self):
-        """Check for sand that touches both bounds and remove it if found"""
+        """Check for same-colored sand that touches both bounds and remove it"""
         current_time = pygame.time.get_ticks()
         
-        # If we're already waiting to remove sand, check if time has elapsed
+        # Handle removal of previously identified connected sand
         if self.connected_sand_timer is not None:
             if current_time - self.connected_sand_timer >= 20:
                 if self.sand_to_remove:
-                    for x, y in self.sand_to_remove:
+                    # Create a set of positions to remove for faster lookup
+                    remove_positions = self.sand_to_remove
+                    
+                    # Update grid
+                    for x, y in remove_positions:
                         self.grid[x][y] = False
-                    new_particles = []
-                    remove_positions = {(x, y) for x, y in self.sand_to_remove}
-                    for sand in self.sand_particles:
-                        grid_x, grid_y = int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)
-                        if (grid_x, grid_y) not in remove_positions:
-                            new_particles.append(sand)
-                    self.sand_particles = new_particles
+                    
+                    # Remove particles
+                    self.sand_particles = [sand for sand in self.sand_particles 
+                                         if (int(sand.x//SAND_SIZE), 
+                                             int(sand.y//SAND_SIZE)) not in remove_positions]
+                    
+                    # Clear active square if all its particles were removed
+                    if self.active_square:
+                        self.active_square = [sand for sand in self.active_square 
+                                            if sand in self.sand_particles]
+                        
                 self.connected_sand_timer = None
                 self.sand_to_remove = None
             return
 
-        # If touch timer is not set or hasn't elapsed, don't check for connections
-        if self.touch_timer is None:
-            self.touch_timer = current_time
-            return
-        elif current_time - self.touch_timer < self.touch_delay:
-            return
-        
+        # Start checking for connections
         visited = set()
         all_connected = set()
         
-        # Check each row for connected sand
+        # Check for connections from left wall
         for y in range(WINDOW_HEIGHT // SAND_SIZE):
-            if self.grid[0][y]:
-                connected = self.find_connected_sand(0, y, visited)
+            if not self.grid[0][y]:
+                continue
+                
+            # Find sand at left wall
+            left_sand = None
+            for sand in self.sand_particles:
+                if (int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)) == (0, y):
+                    left_sand = sand
+                    break
+            
+            if left_sand:
+                # Find all connected sand of the same color
+                connected = self.find_connected_sand(0, y, left_sand.color, visited)
+                
+                # Check if this group reaches the right wall
                 if any(x == (WINDOW_WIDTH//SAND_SIZE - 1) for x, _ in connected):
                     all_connected.update(connected)
-            
-            if self.grid[WINDOW_WIDTH//SAND_SIZE - 1][y]:
-                connected = self.find_connected_sand(WINDOW_WIDTH//SAND_SIZE - 1, y, visited)
-                if any(x == 0 for x, _ in connected):
-                    all_connected.update(connected)
         
+        # If we found any valid connections, start the removal timer
         if all_connected:
             self.connected_sand_timer = current_time
             self.sand_to_remove = all_connected
-            self.touch_timer = None  # Reset touch timer after finding connection
     
     def add_sand_square(self, center_x):
         # Calculate the top-left corner of the square
         start_x = center_x - (self.square_size * SAND_SIZE) // 2
+        
+        # Choose one random color for the entire square
+        square_color = random.choice(SAND_COLORS)
+        
+        # Store the new square's particles
+        new_square = []
         
         # Add sand particles in a square pattern
         for row in range(self.square_size):
@@ -148,7 +247,12 @@ class SandSimulation:
                     
                     if not self.grid[grid_x][grid_y]:
                         new_sand = SandGrain(x, y)
+                        new_sand.color = square_color
+                        new_square.append(new_sand)
                         self.sand_particles.append(new_sand)
+        
+        self.active_square = new_square
+        self.can_move = True  # Reset movement control for new square
     
     def check_slope(self, x, y):
         # 检查左右两侧的高度差
@@ -214,6 +318,19 @@ class SandSimulation:
     def update(self):
         any_movement = False
         
+        # First check if active square has touched anything
+        if self.active_square and self.can_move:
+            for sand in self.active_square:
+                if not sand.settled:
+                    new_y = int((sand.y + SAND_SIZE) // SAND_SIZE)
+                    new_x = int(sand.x // SAND_SIZE)
+                    # Check if sand will hit ground or other sand
+                    if (new_y >= WINDOW_HEIGHT//SAND_SIZE or 
+                        (new_y < WINDOW_HEIGHT//SAND_SIZE and self.grid[new_x][new_y])):
+                        self.can_move = False  # Disable movement once touched
+                        break
+        
+        # Regular update for all particles
         for sand in self.sand_particles:
             initial_pos = (sand.x, sand.y)
             
@@ -256,11 +373,9 @@ class SandSimulation:
             if (sand.x, sand.y) != initial_pos:
                 any_movement = True
         
-        # Only check for connected sand if there's no movement
+        # Check the connection of sand
         if not any_movement:
             self.check_and_remove_connected_sand()
-        else:
-            self.touch_timer = None  # Reset touch timer if there's movement
     
     def draw(self, surface):
         for sand in self.sand_particles:
@@ -270,28 +385,30 @@ class SandSimulation:
 def main():
     simulation = SandSimulation()
     running = True
-    mouse_pressed = False
-    last_spawn_time = 0
-    spawn_delay = 500  # Delay in milliseconds between square spawns
+    
+    # Spawn the first square
+    simulation.add_sand_square(WINDOW_WIDTH // 2)  # Reset current_x to center
+    simulation.current_x = WINDOW_WIDTH // 2  # Reset spawn position
 
     while running:
-        current_time = pygame.time.get_ticks()
-        
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                mouse_pressed = True
-            elif event.type == pygame.MOUSEBUTTONUP:
-                mouse_pressed = False
-        
-        if mouse_pressed and current_time - last_spawn_time > spawn_delay:
-            mouse_x, _ = pygame.mouse.get_pos()
-            simulation.add_sand_square(mouse_x)
-            last_spawn_time = current_time
+
+        # Handle keyboard input
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_LEFT]:
+            simulation.move_left()
+        if keys[pygame.K_RIGHT]:
+            simulation.move_right()
         
         # Update sand positions
         simulation.update()
+        
+        # Spawn new square if previous one has landed
+        if simulation.is_square_landed():
+            simulation.current_x = WINDOW_WIDTH // 2  # Reset spawn position to center
+            simulation.add_sand_square(simulation.current_x)
         
         # Draw
         screen.fill(BLACK)
