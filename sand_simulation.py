@@ -40,13 +40,10 @@ class SandSimulation:
         self.slide_chance = 0.95
         self.height_threshold = 2
         self.square_size = 20
-        self.connected_sand_timer = None
-        self.sand_to_remove = None
-        self.touch_delay = 20
         self.current_x = WINDOW_WIDTH // 2
         self.move_speed = 5 * SAND_SIZE
         self.active_square = None
-        self.can_move = True  # Flag to control movement
+        self.can_move = True
         
     def is_square_landed(self):
         """Check if the current square has landed"""
@@ -167,35 +164,7 @@ class SandSimulation:
         return connected
     
     def check_and_remove_connected_sand(self):
-        """Check for same-colored sand that touches both bounds and remove it"""
-        current_time = pygame.time.get_ticks()
-        
-        # Handle removal of previously identified connected sand
-        if self.connected_sand_timer is not None:
-            if current_time - self.connected_sand_timer >= 20:
-                if self.sand_to_remove:
-                    # Create a set of positions to remove for faster lookup
-                    remove_positions = self.sand_to_remove
-                    
-                    # Update grid
-                    for x, y in remove_positions:
-                        self.grid[x][y] = False
-                    
-                    # Remove particles
-                    self.sand_particles = [sand for sand in self.sand_particles 
-                                         if (int(sand.x//SAND_SIZE), 
-                                             int(sand.y//SAND_SIZE)) not in remove_positions]
-                    
-                    # Clear active square if all its particles were removed
-                    if self.active_square:
-                        self.active_square = [sand for sand in self.active_square 
-                                            if sand in self.sand_particles]
-                        
-                self.connected_sand_timer = None
-                self.sand_to_remove = None
-            return
-
-        # Start checking for connections
+        """Check for same-colored sand that touches both bounds and remove it immediately"""
         visited = set()
         all_connected = set()
         
@@ -219,10 +188,21 @@ class SandSimulation:
                 if any(x == (WINDOW_WIDTH//SAND_SIZE - 1) for x, _ in connected):
                     all_connected.update(connected)
         
-        # If we found any valid connections, start the removal timer
+        # Remove connected sand immediately if found
         if all_connected:
-            self.connected_sand_timer = current_time
-            self.sand_to_remove = all_connected
+            # Update grid
+            for x, y in all_connected:
+                self.grid[x][y] = False
+            
+            # Remove particles
+            self.sand_particles = [sand for sand in self.sand_particles 
+                                 if (int(sand.x//SAND_SIZE), 
+                                     int(sand.y//SAND_SIZE)) not in all_connected]
+            
+            # Clear active square if all its particles were removed
+            if self.active_square:
+                self.active_square = [sand for sand in self.active_square 
+                                    if sand in self.sand_particles]
     
     def add_sand_square(self, center_x):
         # Calculate the top-left corner of the square
