@@ -6,9 +6,9 @@ import sys
 pygame.init()
 
 # 常量定义
-WINDOW_WIDTH = 800
-WINDOW_HEIGHT = 600
-SAND_SIZE = 3  # 增加沙粒大小
+WINDOW_WIDTH = 600
+WINDOW_HEIGHT = 1000
+SAND_SIZE = 8  # Increased from 3 to 8 pixels
 FPS = 60       # 调整帧率
 
 # 颜色定义
@@ -41,12 +41,114 @@ class SandSimulation:
                     for _ in range(WINDOW_WIDTH // SAND_SIZE)]
         self.max_slope = 1
         self.slide_chance = 0.95
-        self.height_threshold = 2  # 高度差阈值
+        self.height_threshold = 2
+        self.square_size = 20
+        self.connected_sand_timer = None
+        self.sand_to_remove = None
+        self.touch_timer = None  # Timer for when sand touches
+        self.touch_delay = 20   # Delay in milliseconds before checking connection
     
-    def add_sand(self, x):
-        # 在顶部添加新的沙粒
-        new_sand = SandGrain(x, 0)
-        self.sand_particles.append(new_sand)
+    def find_connected_sand(self, start_x, start_y, visited):
+        """Find all connected sand particles using iterative flood fill with 8-direction check"""
+        if (start_x < 0 or start_x >= WINDOW_WIDTH//SAND_SIZE or
+            start_y < 0 or start_y >= WINDOW_HEIGHT//SAND_SIZE or
+            not self.grid[start_x][start_y] or
+            (start_x, start_y) in visited):
+            return set()
+        
+        connected = set()
+        stack = [(start_x, start_y)]
+        
+        while stack:
+            x, y = stack.pop()
+            
+            if (x, y) in visited:
+                continue
+                
+            visited.add((x, y))
+            connected.add((x, y))
+            
+            # Check all 8 directions (including diagonals)
+            directions = [
+                (0, 1), (0, -1), (1, 0), (-1, 0),  # orthogonal
+                (1, 1), (1, -1), (-1, 1), (-1, -1)  # diagonal
+            ]
+            for dx, dy in directions:
+                next_x, next_y = x + dx, y + dy
+                if (next_x >= 0 and next_x < WINDOW_WIDTH//SAND_SIZE and
+                    next_y >= 0 and next_y < WINDOW_HEIGHT//SAND_SIZE and
+                    self.grid[next_x][next_y] and
+                    (next_x, next_y) not in visited):
+                    stack.append((next_x, next_y))
+        
+        return connected
+    
+    def check_and_remove_connected_sand(self):
+        """Check for sand that touches both bounds and remove it if found"""
+        current_time = pygame.time.get_ticks()
+        
+        # If we're already waiting to remove sand, check if time has elapsed
+        if self.connected_sand_timer is not None:
+            if current_time - self.connected_sand_timer >= 20:
+                if self.sand_to_remove:
+                    for x, y in self.sand_to_remove:
+                        self.grid[x][y] = False
+                    new_particles = []
+                    remove_positions = {(x, y) for x, y in self.sand_to_remove}
+                    for sand in self.sand_particles:
+                        grid_x, grid_y = int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)
+                        if (grid_x, grid_y) not in remove_positions:
+                            new_particles.append(sand)
+                    self.sand_particles = new_particles
+                self.connected_sand_timer = None
+                self.sand_to_remove = None
+            return
+
+        # If touch timer is not set or hasn't elapsed, don't check for connections
+        if self.touch_timer is None:
+            self.touch_timer = current_time
+            return
+        elif current_time - self.touch_timer < self.touch_delay:
+            return
+        
+        visited = set()
+        all_connected = set()
+        
+        # Check each row for connected sand
+        for y in range(WINDOW_HEIGHT // SAND_SIZE):
+            if self.grid[0][y]:
+                connected = self.find_connected_sand(0, y, visited)
+                if any(x == (WINDOW_WIDTH//SAND_SIZE - 1) for x, _ in connected):
+                    all_connected.update(connected)
+            
+            if self.grid[WINDOW_WIDTH//SAND_SIZE - 1][y]:
+                connected = self.find_connected_sand(WINDOW_WIDTH//SAND_SIZE - 1, y, visited)
+                if any(x == 0 for x, _ in connected):
+                    all_connected.update(connected)
+        
+        if all_connected:
+            self.connected_sand_timer = current_time
+            self.sand_to_remove = all_connected
+            self.touch_timer = None  # Reset touch timer after finding connection
+    
+    def add_sand_square(self, center_x):
+        # Calculate the top-left corner of the square
+        start_x = center_x - (self.square_size * SAND_SIZE) // 2
+        
+        # Add sand particles in a square pattern
+        for row in range(self.square_size):
+            for col in range(self.square_size):
+                x = start_x + (col * SAND_SIZE)
+                y = row * SAND_SIZE
+                
+                # Ensure the sand is within screen bounds
+                if 0 <= x < WINDOW_WIDTH and 0 <= y < WINDOW_HEIGHT:
+                    grid_x = int(x // SAND_SIZE)
+                    grid_y = int(y // SAND_SIZE)
+                    
+                    if not self.grid[grid_x][grid_y]:
+                        new_sand = SandGrain(x, y)
+                        self.sand_particles.append(new_sand)
     
     def check_slope(self, x, y):
         # 检查左右两侧的高度差
@@ -110,11 +212,13 @@ class SandSimulation:
         return 0
     
     def update(self):
+        any_movement = False
+        
         for sand in self.sand_particles:
+            initial_pos = (sand.x, sand.y)
+            
             if sand.settled:
                 x, y = int(sand.x // SAND_SIZE), int(sand.y // SAND_SIZE)
-                
-                # 检查是否需要滑动
                 slide_direction = self.check_slope(x, y)
                 if slide_direction != 0 and random.random() < self.slide_chance:
                     self.grid[x][y] = False
@@ -122,14 +226,13 @@ class SandSimulation:
                     new_x = (x + slide_direction) * SAND_SIZE
                     if 0 <= new_x < WINDOW_WIDTH and not self.grid[x + slide_direction][y]:
                         sand.x = new_x
+                        any_movement = True
                 continue
             
             new_x = int(sand.x // SAND_SIZE)
             new_y = int((sand.y + SAND_SIZE) // SAND_SIZE)
             
-            # 检查是否到达底部或遇到其他沙粒
             if new_y >= WINDOW_HEIGHT//SAND_SIZE or self.grid[new_x][new_y]:
-                # 尝试滑向两边
                 current_y = int(sand.y // SAND_SIZE)
                 slide_direction = self.check_slope(new_x, current_y)
                 if slide_direction != 0:
@@ -137,25 +240,27 @@ class SandSimulation:
                     if (0 <= test_x < WINDOW_WIDTH//SAND_SIZE and 
                         not self.grid[test_x][current_y]):
                         sand.x = test_x * SAND_SIZE
+                        any_movement = True
                         continue
                 
-                # 如果无法移动，则停止
                 sand.settled = True
                 self.grid[new_x][current_y] = True
                 sand.x = new_x * SAND_SIZE
                 sand.y = current_y * SAND_SIZE
                 continue
             
-            # 正常下落
             if not self.grid[new_x][new_y]:
                 sand.y += SAND_SIZE
-                # 随机左右偏移
-                if random.random() < 0.2:
-                    offset = random.choice([-1, 1])
-                    test_x = new_x + offset
-                    if (0 <= test_x < WINDOW_WIDTH//SAND_SIZE and 
-                        not self.grid[test_x][new_y]):
-                        sand.x = test_x * SAND_SIZE
+                any_movement = True
+            
+            if (sand.x, sand.y) != initial_pos:
+                any_movement = True
+        
+        # Only check for connected sand if there's no movement
+        if not any_movement:
+            self.check_and_remove_connected_sand()
+        else:
+            self.touch_timer = None  # Reset touch timer if there's movement
     
     def draw(self, surface):
         for sand in self.sand_particles:
@@ -166,8 +271,12 @@ def main():
     simulation = SandSimulation()
     running = True
     mouse_pressed = False
+    last_spawn_time = 0
+    spawn_delay = 500  # Delay in milliseconds between square spawns
 
     while running:
+        current_time = pygame.time.get_ticks()
+        
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -176,20 +285,15 @@ def main():
             elif event.type == pygame.MOUSEBUTTONUP:
                 mouse_pressed = False
         
-        if mouse_pressed:
+        if mouse_pressed and current_time - last_spawn_time > spawn_delay:
             mouse_x, _ = pygame.mouse.get_pos()
-            # 每帧添加沙粒
-            for _ in range(3):  # 减少每帧添加的数量
-                offset = random.randint(-2, 2) * SAND_SIZE
-                x = (mouse_x + offset) // SAND_SIZE * SAND_SIZE
-                if (0 <= x < WINDOW_WIDTH and 
-                    not simulation.grid[int(x//SAND_SIZE)][0]):
-                    simulation.add_sand(x)
+            simulation.add_sand_square(mouse_x)
+            last_spawn_time = current_time
         
-        # 更新沙子位置
+        # Update sand positions
         simulation.update()
         
-        # 绘制
+        # Draw
         screen.fill(BLACK)
         simulation.draw(screen)
         pygame.display.flip()
