@@ -1,6 +1,7 @@
 import pygame
 import random
 import sys
+import numpy as np
 
 # 初始化 Pygame
 pygame.init()
@@ -10,6 +11,9 @@ WINDOW_WIDTH = 600
 WINDOW_HEIGHT = 1000
 SAND_SIZE = 8  # Increased from 3 to 8 pixels
 FPS = 60       # 调整帧率
+DIRECTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+GRID_WIDTH = WINDOW_WIDTH // SAND_SIZE
+GRID_HEIGHT = WINDOW_HEIGHT // SAND_SIZE
 
 # 颜色定义
 BLACK = (0, 0, 0)
@@ -35,8 +39,7 @@ class SandGrain:
 class SandSimulation:
     def __init__(self):
         self.sand_particles = []
-        self.grid = [[False for _ in range(WINDOW_HEIGHT // SAND_SIZE)] 
-                    for _ in range(WINDOW_WIDTH // SAND_SIZE)]
+        self.grid = np.zeros((WINDOW_WIDTH // SAND_SIZE, WINDOW_HEIGHT // SAND_SIZE), dtype=bool)
         self.max_slope = 1
         self.slide_chance = 0.95
         self.height_threshold = 2
@@ -116,21 +119,17 @@ class SandSimulation:
                     sand.x = new_x
     
     def find_connected_sand(self, start_x, start_y, color, visited):
-        """Find all connected sand particles of the same color using iterative flood fill"""
+        """Optimized connected sand finding using numpy operations"""
         if (start_x < 0 or start_x >= WINDOW_WIDTH//SAND_SIZE or
             start_y < 0 or start_y >= WINDOW_HEIGHT//SAND_SIZE or
-            not self.grid[start_x][start_y] or
+            not self.grid[start_x, start_y] or
             (start_x, start_y) in visited):
             return set()
         
-        # Get the sand particle at this position
-        sand_at_pos = None
-        for sand in self.sand_particles:
-            if (int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)) == (start_x, start_y):
-                sand_at_pos = sand
-                break
+        # Find the sand particle at this position using dictionary lookup
+        grid_pos = (start_x, start_y)
+        sand_at_pos = self.particle_lookup.get(grid_pos)
         
-        # If no sand found or different color, return empty set
         if not sand_at_pos or sand_at_pos.color != color:
             return set()
         
@@ -139,33 +138,22 @@ class SandSimulation:
         
         while stack:
             x, y = stack.pop()
-            
             if (x, y) in visited:
                 continue
             
-            # Check if current position has same-colored sand
-            current_sand = None
-            for sand in self.sand_particles:
-                if (int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)) == (x, y):
-                    current_sand = sand
-                    break
-            
+            current_sand = self.particle_lookup.get((x, y))
             if not current_sand or current_sand.color != color:
                 continue
-                
+            
             visited.add((x, y))
             connected.add((x, y))
             
-            # Check all 8 directions
-            directions = [
-                (0, 1), (0, -1), (1, 0), (-1, 0),
-                (1, 1), (1, -1), (-1, 1), (-1, -1)
-            ]
-            for dx, dy in directions:
+            # Check neighbors more efficiently
+            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:
                 next_x, next_y = x + dx, y + dy
-                if (next_x >= 0 and next_x < WINDOW_WIDTH//SAND_SIZE and
-                    next_y >= 0 and next_y < WINDOW_HEIGHT//SAND_SIZE and
-                    self.grid[next_x][next_y] and
+                if (0 <= next_x < WINDOW_WIDTH//SAND_SIZE and
+                    0 <= next_y < WINDOW_HEIGHT//SAND_SIZE and
+                    self.grid[next_x, next_y] and
                     (next_x, next_y) not in visited):
                     stack.append((next_x, next_y))
         
@@ -296,7 +284,7 @@ class SandSimulation:
                     possible_dirs.append(1)
                 return random.choice(possible_dirs) if possible_dirs else 0
         
-        # 如果没有显著的高度差，检查普通的滑动条件
+        # 如果没��显著的高度差，检查普通的滑动条件
         left_empty = x > 0 and not self.grid[x-1][y]
         right_empty = x < (WINDOW_WIDTH//SAND_SIZE)-1 and not self.grid[x+1][y]
         
@@ -318,20 +306,25 @@ class SandSimulation:
     
     def update(self):
         any_movement = False
+        any_settled_this_frame = False
         
-        # First check if active square has touched anything
+        # Update particle lookup for this frame
+        self.update_particle_lookup()
+        
+        # Check active square state
         if self.active_square and self.can_move:
             for sand in self.active_square:
                 if not sand.settled:
                     new_y = int((sand.y + SAND_SIZE) // SAND_SIZE)
                     new_x = int(sand.x // SAND_SIZE)
                     if (new_y >= WINDOW_HEIGHT//SAND_SIZE or 
-                        (new_y < WINDOW_HEIGHT//SAND_SIZE and self.grid[new_x][new_y])):
+                        (new_y < WINDOW_HEIGHT//SAND_SIZE and self.grid[new_x, new_y])):
                         self.can_move = False
                         break
         
-        # Regular update for all particles
-        any_settled_this_frame = False  # Track if any particles settled this frame
+        # Use numpy operations for faster grid updates
+        updates = []
+        removes = []
         
         for sand in self.sand_particles:
             initial_pos = (sand.x, sand.y)
@@ -341,10 +334,10 @@ class SandSimulation:
                 x, y = int(sand.x // SAND_SIZE), int(sand.y // SAND_SIZE)
                 slide_direction = self.check_slope(x, y)
                 if slide_direction != 0 and random.random() < self.slide_chance:
-                    self.grid[x][y] = False
+                    removes.append((x, y))
                     sand.settled = False
                     new_x = (x + slide_direction) * SAND_SIZE
-                    if 0 <= new_x < WINDOW_WIDTH and not self.grid[x + slide_direction][y]:
+                    if 0 <= new_x < WINDOW_WIDTH and not self.grid[x + slide_direction, y]:
                         sand.x = new_x
                         any_movement = True
                 continue
@@ -352,34 +345,39 @@ class SandSimulation:
             new_x = int(sand.x // SAND_SIZE)
             new_y = int((sand.y + SAND_SIZE) // SAND_SIZE)
             
-            if new_y >= WINDOW_HEIGHT//SAND_SIZE or self.grid[new_x][new_y]:
+            if new_y >= WINDOW_HEIGHT//SAND_SIZE or self.grid[new_x, new_y]:
                 current_y = int(sand.y // SAND_SIZE)
                 slide_direction = self.check_slope(new_x, current_y)
                 if slide_direction != 0:
                     test_x = new_x + slide_direction
                     if (0 <= test_x < WINDOW_WIDTH//SAND_SIZE and 
-                        not self.grid[test_x][current_y]):
+                        not self.grid[test_x, current_y]):
                         sand.x = test_x * SAND_SIZE
                         any_movement = True
                         continue
                 
                 sand.settled = True
-                self.grid[new_x][current_y] = True
+                updates.append((new_x, current_y))
                 sand.x = new_x * SAND_SIZE
                 sand.y = current_y * SAND_SIZE
                 
-                if not was_settled:  # If particle just settled this frame
+                if not was_settled:
                     any_settled_this_frame = True
                 continue
             
-            if not self.grid[new_x][new_y]:
+            if not self.grid[new_x, new_y]:
                 sand.y += SAND_SIZE
                 any_movement = True
             
             if (sand.x, sand.y) != initial_pos:
                 any_movement = True
         
-        # Check for connections if any particles settled or if no movement
+        # Batch update the grid
+        for x, y in removes:
+            self.grid[x, y] = False
+        for x, y in updates:
+            self.grid[x, y] = True
+        
         if any_settled_this_frame or not any_movement:
             self.check_and_remove_connected_sand()
     
@@ -395,6 +393,13 @@ class SandSimulation:
                 
             pygame.draw.rect(surface, color, 
                            (int(sand.x), int(sand.y), SAND_SIZE, SAND_SIZE))
+    
+    def update_particle_lookup(self):
+        """Maintain a dictionary of particle positions for quick lookup"""
+        self.particle_lookup = {
+            (int(sand.x//SAND_SIZE), int(sand.y//SAND_SIZE)): sand 
+            for sand in self.sand_particles
+        }
 
 def main():
     simulation = SandSimulation()
